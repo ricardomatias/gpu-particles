@@ -5,14 +5,14 @@ group = "org.openrndr.template"
 version = "0.3.9"
 val applicationMainClass = "TemplateProgramKt"
 
-val openrndrUseSnapshot = true
+val openrndrUseSnapshot = false
 val openrndrVersion = if (openrndrUseSnapshot) "0.4.0-SNAPSHOT" else "0.3.39"
 
-val panelUseSnapshot = true
-val panelVersion = if (panelUseSnapshot) "0.4.0-SNAPSHOT" else "0.3.21"
+val panelUseSnapshot = false
+val panelVersion = if (panelUseSnapshot) "0.4.0-SNAPSHOT" else "0.3.22-rc.1"
 
-val orxUseSnapshot = true
-val orxVersion = if (orxUseSnapshot) "0.4.0-SNAPSHOT" else "0.3.47"
+val orxUseSnapshot = false
+val orxVersion = if (orxUseSnapshot) "0.4.0-SNAPSHOT" else "0.3.49"
 
 // supported features are: orx-camera, orx-compositor,orx-easing, orx-filter-extension,orx-file-watcher, orx-fx
 // orx-integral-image, orx-interval-tree, orx-jumpflood, orx-kinect-v1, orx-kdtree, orx-mesh-generators,orx-midi, orx-no-clear,
@@ -104,7 +104,7 @@ dependencies {
     implementation(openrndr("filter"))
 
     implementation("org.jetbrains.kotlinx", "kotlinx-coroutines-core","1.3.3")
-    implementation("org.openrndr.plugins","openrndr-plugins","1.0-SNAPSHOT")
+//    implementation("org.openrndr.plugins","openrndr-plugins","1.0-SNAPSHOT")
     implementation("io.github.microutils", "kotlin-logging","1.7.8")
 
 //    compile(fileTree("dir" to "external/hemesh/library", "include" to "*.jar"))

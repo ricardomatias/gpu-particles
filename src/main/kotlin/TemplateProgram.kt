@@ -3,14 +3,10 @@ import org.openrndr.application
 import org.openrndr.draw.*
 import org.openrndr.extensions.Screenshots
 import org.openrndr.extra.gui.GUI
-//import org.openrndr.extra.olive.Resources
 import org.openrndr.extra.palette.PaletteStudio
-import org.openrndr.extras.camera.AxisHelper
 import org.openrndr.extras.camera.OrbitalCamera
 import org.openrndr.extras.camera.OrbitalControls
 import org.openrndr.math.*
-import org.openrndr.math.transforms.transform
-import org.openrndr.plugins.fps.FPS
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
@@ -69,11 +65,7 @@ fun main() = application {
         extend(paletteStudio)
         extend(controls)
         extend(camera)
-        extend(AxisHelper())
         extend(Screenshots())
-        extend(FPS()) {
-            corner = FPS.Corner.BOTTOM_LEFT
-        }
         extend(gui)
         extend {
             drawer.background(paletteStudio.background)
