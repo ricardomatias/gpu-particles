@@ -4,10 +4,14 @@ import org.openrndr.color.ColorRGBa
 import org.openrndr.draw.*
 import org.openrndr.extra.glslify.preprocessGlslify
 import org.openrndr.extra.noise.Random
+import org.openrndr.extra.parameters.Description
 import org.openrndr.extra.parameters.DoubleParameter
+import org.openrndr.extras.camera.OrbitalCamera
+import org.openrndr.math.Quaternion
 import org.openrndr.math.Spherical
 import org.openrndr.math.Vector3
 import org.openrndr.math.Vector4
+import org.openrndr.math.transforms.normalMatrix
 import org.openrndr.math.transforms.transform
 import paletteStudio
 import kotlin.math.PI
@@ -21,10 +25,12 @@ internal val posShader = """
 
     uniform sampler2D tex0;
     uniform sampler2D tex1;
+    uniform sampler2D tex2;
     
     uniform float uTime;
     uniform float uNoiseScale;
     uniform float uNoiseTime;
+    uniform float uAgeLimit;
     uniform float deltaTime;
     
 #pragma glslify: snoise = require(glsl-noise/simplex/4d)
@@ -57,29 +63,35 @@ internal val posShader = """
       return normalize( vec3( x , y , z ) * divisor );
     }
     
-    float rand(vec2 n) { 
-	    return fract(sin(dot(n, vec2(12.9898, 4.1414))) * 43758.5453);
+    float rand(vec2 co){
+      return abs(fract(sin(dot(co.xy ,vec2(12.9898,78.233))) * 43758.5453));
     }
 
     // NOISE END
     layout(location = 0) out vec4 o_position;
     layout(location = 1) out vec4 o_velocity;
+    layout(location = 2) out vec4 o_info;
 
     void main() {
-        vec4 particle = texture(tex0, v_texCoord0).rgba;
+        vec2 uv = v_texCoord0;
+        ivec2 size = textureSize(tex0, 0);
+        vec4 particle = texelFetch(tex0, ivec2(uv * size), 0);
         vec3 pos = particle.xyz;
-        float age = particle.w;
         
-        vec3 vel = texture(tex1, v_texCoord0).rgb;
+        vec3 vel = texelFetch(tex1, ivec2(uv * size), 0).rgb;
+        
+        vec4 particleInfo = texelFetch(tex2, ivec2(uv * size), 0);
+        float age = particleInfo.x * uAgeLimit;
+        float instance = particleInfo.y;
+        
+        float maxFriction = 0.9;
+        float friction = particleInfo.z * maxFriction;
 
         vec3 noise = curlNoise(pos.xyz * uNoiseScale, uTime * uNoiseTime);
 
-        if (age == 0.0) {
-            age = rand(pos.xy + vel.xy) * 10.0;
-        }
-        if (age > 10.0) {
-            pos = noise * 10.0;
-            age = 0.0;
+        if (age > uAgeLimit) {
+            pos = noise * rand(uv) * 10.0;
+            age = rand(uv + instance + uTime) * uAgeLimit;
         }
 
         vel += noise * deltaTime;
@@ -88,13 +100,15 @@ internal val posShader = """
         
         age += deltaTime;
 
-        o_position = vec4(pos, age);
+        o_position = vec4(pos, 1.0);
         o_velocity = vec4(vel, 1.0);
+        o_info = vec4(age / uAgeLimit, 0.0, 0.0, 1.0);
     }
 """.trimIndent()
 
 val posShaderCode = preprocessGlslify(posShader)
 
+@Description("Particles")
 class PositionShader : Filter(filterShaderFromCode(posShaderCode)) {
     var range: Double by parameters
     var deltaTime: Double by parameters
@@ -103,10 +117,13 @@ class PositionShader : Filter(filterShaderFromCode(posShaderCode)) {
     var uNoiseScale: Double by parameters
     @DoubleParameter("Noise Time", 0.01, 1.0, 2)
     var uNoiseTime: Double by parameters
+    @DoubleParameter("Max Age", 0.1, 10.0, 2)
+    var uAgeLimit: Double by parameters
 
     init {
-        uNoiseScale = 0.01
+        uNoiseScale = 0.05
         uNoiseTime = 0.1
+        uAgeLimit = 5.0
     }
 }
 
@@ -115,13 +132,12 @@ class ParticlesManager(val particleRes: Int, val geometry: VertexBuffer, colors:
 
     val positionsBuffer = colorBuffer(particleRes, particleRes, type = ColorType.FLOAT32, format = ColorFormat.RGBa)
     val velocityBuffer = colorBuffer(particleRes, particleRes, type = ColorType.FLOAT32, format = ColorFormat.RGBa)
+    val infoBuffer = colorBuffer(particleRes, particleRes, type = ColorType.FLOAT32, format = ColorFormat.RGBa)
     val rotationBuffer = colorBuffer(particleRes, particleRes, type = ColorType.FLOAT32, format = ColorFormat.RGBa)
 
     val transforms: VertexBuffer
 
     val positionShader: PositionShader = PositionShader()
-
-    val range = 10.0
 
     init {
         positionsBuffer.filterMag = MagnifyingFilter.NEAREST
@@ -130,7 +146,14 @@ class ParticlesManager(val particleRes: Int, val geometry: VertexBuffer, colors:
 
         fillBuffer(positionsBuffer) { x: Int, y: Int ->
             val pos = Random.Vector3(-10.0, 10.0)
-            Vector4(pos.x, pos.y, pos.z, 0.0)
+            Vector4(pos.x, pos.y, pos.z, 1.0)
+        }
+
+        fillBuffer(infoBuffer) { x: Int, y: Int ->
+            val instance = x * y.toDouble()
+            val age = Random.double0()
+            val friction = Random.double(0.2, 0.9)
+            Vector4(age, instance, friction, 1.0)
         }
 
         fillBuffer(velocityBuffer) { x: Int, y: Int ->
@@ -147,98 +170,96 @@ class ParticlesManager(val particleRes: Int, val geometry: VertexBuffer, colors:
         // -- create the secondary vertex buffer, which will hold transformations
         transforms = vertexBuffer(vertexFormat {
             attribute("scale", VertexElementType.MATRIX44_FLOAT32)
-            attribute("color", VertexElementType.VECTOR3_FLOAT32)
+//            attribute("color", VertexElementType.VECTOR3_FLOAT32)
         }, particleCount)
 
         // -- fill the transform buffer
         transforms.put {
             for (i in 0 until particleCount) {
                 write(transform {
-                    scale(Random.double(1.0, 3.0))
+                    scale(1.0)
                 })
-                val color = Random.pick(colors).toLinear()
-                write(Vector3(color.r, color.g, color.b))
+//                val color = Random.pick(colors).toLinear()
+//                write(Vector3(color.r, color.g, color.b))
             }
         }
     }
 
     fun draw(
         drawer: Drawer,
+        camera: OrbitalCamera,
         time: Double,
-        deltaTime: Double
+        deltaTime: Double,
+        range: Double,
+        alpha: Double
     ) {
         drawer.isolated {
-            drawer.fill = paletteStudio.foreground.opacify(0.4)
+            drawer.fill = paletteStudio.foreground
             drawer.shadeStyle = shadeStyle {
+                vertexPreamble = """
+                    out float age;
+                """.trimIndent()
                 vertexTransform = """
                     vec4 pos = texelFetch(p_posTex, ivec2(c_instance % p_res, int(c_instance / p_res)), 0);
-                    vec4 rot = texelFetch(p_rotTex, ivec2(c_instance % p_res, int(c_instance / p_res)), 0);
-                    
-                    rot.xyz *= p_TAU;
-                    rot.xyz += p_time * 1.0 / (1 + c_instance);
+                    vec4 info = texelFetch(p_infoTex, ivec2(c_instance % p_res, int(c_instance / p_res)), 0);
                     
                     pos *= p_range;
-
-                    float x = pos.x;// * p_range;
-                    float y = pos.y;// * p_range;
-                    float z = pos.z;// * p_range;
                     
-                    float cosX = cos(rot.x);
-                    float sinX = sin(rot.x);
-                    float cosY = cos(rot.y);
-                    float sinY = sin(rot.y);
-                    float cosZ = cos(rot.z);
-                    float sinZ = sin(rot.z);
-                    
-                    mat4 rotation = mat4(1.0);
-                    
-                    float m00 = cosY * cosZ + sinX * sinY * sinZ; 
-                    float m01 = cosY * sinZ - sinX * sinY * cosZ; 
-                    float m02 = cosX * sinY;
-                    float m03 = 0.0;
-                    
-                    float m04 = -cosX * sinZ; 
-                    float m05 = cosX * cosZ; 
-                    float m06 = sinX;
-                    float m07 = 0.0;
-                    
-                    float m08 = sinX * cosY * sinZ - sinY * cosZ;
-                    float m09 = -sinY * sinZ - sinX * cosY * cosZ;
-                    float m10 = cosX * cosY;
-                    float m11 = 0.0;
-                    
-                    //------ Orientation ---------------------------------
-                    rotation[0] = vec4(m00, m01, m02, m03); // first column.
-                    rotation[1] = vec4(m04, m05, m06, m07); // second column.
-                    rotation[2] = vec4(m08, m09, m10, m11); // third column.
+                    age = info.x;
 
                     mat4 translation = mat4(1.0);
-                    translation[3] = vec4(x, y, z, 1.0);
+                    translation[3] = vec4(pos.xyz, 1.0);
+                    
+                    mat4 rot = mat4(1.0);
+                    
+                    // Column 0:
+                    rot[0][0] = p_viewModelSpace[0][0];
+                    rot[0][1] = p_viewModelSpace[0][1];
+                    rot[0][2] = p_viewModelSpace[0][2];
+                    
+                    // Column 1:
+                    rot[1][0] = p_viewModelSpace[1][0];
+                    rot[1][1] = p_viewModelSpace[1][1];
+                    rot[1][2] = p_viewModelSpace[1][2];
+                    
+                    // Column 2:
+                    rot[2][0] = p_viewModelSpace[2][0];
+                    rot[2][1] = p_viewModelSpace[2][1];
+                    rot[2][2] = p_viewModelSpace[2][2];
 
                     x_viewMatrix = p_viewMatrix;
-                    x_modelMatrix = translation * rotation * i_scale;
-                    
-                    gl_PointSize = 100.0;
+                    x_modelMatrix = translation * rot * i_scale;
+                """.trimIndent()
+                fragmentPreamble = """
+                    in float age;
+                """.trimIndent()
+                fragmentTransform = """
+                    x_fill.a = mix(p_alpha, 0.0, pow(age, 2.0));
                 """.trimIndent()
                 parameter("res", particleRes)
                 parameter("posTex", positionsBuffer)
                 parameter("rotTex", rotationBuffer)
+                parameter("infoTex", infoBuffer)
                 parameter("TAU", 2.0 * PI)
                 parameter("time", time)
+                parameter("ageLimit", time)
                 parameter("range", range)
+                parameter("alpha", alpha)
                 parameter("viewMatrix", drawer.view)
+                parameter("viewModelSpace", drawer.view.inversed)
             }
+            drawer.drawStyle.depthTestPass = DepthTestPass.ALWAYS
             drawer.vertexBufferInstances(listOf(geometry), listOf(transforms), DrawPrimitive.TRIANGLE_STRIP, particleCount)
         }
 
         positionShader.deltaTime = deltaTime
         positionShader.uTime = time
 
-        positionShader.apply(arrayOf(positionsBuffer, velocityBuffer), arrayOf(positionsBuffer, velocityBuffer))
+        positionShader.apply(arrayOf(positionsBuffer, velocityBuffer, infoBuffer), arrayOf(positionsBuffer, velocityBuffer, infoBuffer))
 
 //        drawer.isolated {
 //            drawer.defaults()
-//            drawer.image(positionsBuffer, width - 200.0, 0.0, 200.0, 200.0)
+//            drawer.image(infoBuffer, width - 200.0, 0.0, 200.0, 200.0)
 //            drawer.image(velocityBuffer, width - 200.0, 200.0, 200.0, 200.0)
 //        }
     }
