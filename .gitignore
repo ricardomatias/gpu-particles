@@ -1,0 +1,6 @@
+application.log
+build
+out
+.idea
+.gradle
+external
