@@ -107,7 +107,7 @@ dependencies {
     implementation("org.openrndr.plugins","openrndr-plugins","1.0-SNAPSHOT")
     implementation("io.github.microutils", "kotlin-logging","1.7.8")
 
-    compile(fileTree("dir" to "external/hemesh/library", "include" to "*.jar"))
+//    compile(fileTree("dir" to "external/hemesh/library", "include" to "*.jar"))
 
     when(applicationLogging) {
         Logging.NONE -> {
