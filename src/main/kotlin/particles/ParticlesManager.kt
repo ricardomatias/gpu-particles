@@ -102,7 +102,7 @@ internal val posShader = """
 
         o_position = vec4(pos, 1.0);
         o_velocity = vec4(vel, 1.0);
-        o_info = vec4(age / uAgeLimit, 0.0, 0.0, 1.0);
+        o_info = vec4(age / uAgeLimit, instance, 0.0, 1.0);
     }
 """.trimIndent()
 
@@ -117,7 +117,7 @@ class PositionShader : Filter(filterShaderFromCode(posShaderCode)) {
     var uNoiseScale: Double by parameters
     @DoubleParameter("Noise Time", 0.01, 1.0, 2)
     var uNoiseTime: Double by parameters
-    @DoubleParameter("Max Age", 0.1, 10.0, 2)
+    @DoubleParameter("Max Age", 0.1, 20.0, 2)
     var uAgeLimit: Double by parameters
 
     init {
@@ -127,7 +127,7 @@ class PositionShader : Filter(filterShaderFromCode(posShaderCode)) {
     }
 }
 
-class ParticlesManager(val particleRes: Int, val geometry: VertexBuffer, colors: List<ColorRGBa>) {
+class ParticlesManager(val particleRes: Int, val geometry: VertexBuffer) {
     val particleCount = particleRes * particleRes
 
     val positionsBuffer = colorBuffer(particleRes, particleRes, type = ColorType.FLOAT32, format = ColorFormat.RGBa)
@@ -136,6 +136,7 @@ class ParticlesManager(val particleRes: Int, val geometry: VertexBuffer, colors:
     val rotationBuffer = colorBuffer(particleRes, particleRes, type = ColorType.FLOAT32, format = ColorFormat.RGBa)
 
     val transforms: VertexBuffer
+    var colors: VertexBuffer
 
     val positionShader: PositionShader = PositionShader()
 
@@ -150,7 +151,7 @@ class ParticlesManager(val particleRes: Int, val geometry: VertexBuffer, colors:
         }
 
         fillBuffer(infoBuffer) { x: Int, y: Int ->
-            val instance = x * y.toDouble()
+            val instance = x + y * particleRes.toDouble()
             val age = Random.double0()
             val friction = Random.double(0.2, 0.9)
             Vector4(age, instance, friction, 1.0)
@@ -183,25 +184,52 @@ class ParticlesManager(val particleRes: Int, val geometry: VertexBuffer, colors:
 //                write(Vector3(color.r, color.g, color.b))
             }
         }
+
+        colors = vertexBuffer(vertexFormat {
+            attribute("colors", VertexElementType.VECTOR4_FLOAT32, paletteStudio.colors2.size)
+        }, particleCount)
+
+        colors.put {
+            for (i in 0 until particleCount) {
+                for (c in paletteStudio.colors2) {
+                    write(c)
+                }
+            }
+        }
+
+        paletteStudio.onChange {
+            colors = vertexBuffer(vertexFormat {
+                attribute("colors", VertexElementType.VECTOR4_FLOAT32, paletteStudio.colors2.size)
+            }, particleCount)
+
+            colors.put {
+                for (i in 0 until particleCount) {
+                    for (c in paletteStudio.colors2) {
+                        write(c)
+                    }
+                }
+            }
+        }
     }
 
     fun draw(
         drawer: Drawer,
-        camera: OrbitalCamera,
         time: Double,
         deltaTime: Double,
         range: Double,
         alpha: Double
     ) {
         drawer.isolated {
-            drawer.fill = paletteStudio.foreground
             drawer.shadeStyle = shadeStyle {
                 vertexPreamble = """
                     out float age;
+                    out vec4 color;
                 """.trimIndent()
                 vertexTransform = """
                     vec4 pos = texelFetch(p_posTex, ivec2(c_instance % p_res, int(c_instance / p_res)), 0);
                     vec4 info = texelFetch(p_infoTex, ivec2(c_instance % p_res, int(c_instance / p_res)), 0);
+                    
+                    float dist = distance(pos.xyz, vec3(0.0));
                     
                     pos *= p_range;
                     
@@ -213,27 +241,33 @@ class ParticlesManager(val particleRes: Int, val geometry: VertexBuffer, colors:
                     mat4 rot = mat4(1.0);
                     
                     // Column 0:
-                    rot[0][0] = p_viewModelSpace[0][0];
-                    rot[0][1] = p_viewModelSpace[0][1];
-                    rot[0][2] = p_viewModelSpace[0][2];
+                    rot[0][0] = p_cameraWorldSpace[0][0];
+                    rot[0][1] = p_cameraWorldSpace[0][1];
+                    rot[0][2] = p_cameraWorldSpace[0][2];
                     
                     // Column 1:
-                    rot[1][0] = p_viewModelSpace[1][0];
-                    rot[1][1] = p_viewModelSpace[1][1];
-                    rot[1][2] = p_viewModelSpace[1][2];
+                    rot[1][0] = p_cameraWorldSpace[1][0];
+                    rot[1][1] = p_cameraWorldSpace[1][1];
+                    rot[1][2] = p_cameraWorldSpace[1][2];
                     
                     // Column 2:
-                    rot[2][0] = p_viewModelSpace[2][0];
-                    rot[2][1] = p_viewModelSpace[2][1];
-                    rot[2][2] = p_viewModelSpace[2][2];
-
+                    rot[2][0] = p_cameraWorldSpace[2][0];
+                    rot[2][1] = p_cameraWorldSpace[2][1];
+                    rot[2][2] = p_cameraWorldSpace[2][2];
+                    
+                    color = i_colors[int(floor((info.y / p_count) * p_colorsSize))];
+                    
                     x_viewMatrix = p_viewMatrix;
                     x_modelMatrix = translation * rot * i_scale;
                 """.trimIndent()
                 fragmentPreamble = """
                     in float age;
+                    in vec4 color;
                 """.trimIndent()
                 fragmentTransform = """
+                    float dist = distance(v_worldPosition, vec3(0.0));
+//                    x_fill.rgb = vi_colors[int(mod((dist / pow(p_range, 2.0)) , 4.0))].rgb;
+                    x_fill.rgb = color.rgb;
                     x_fill.a = mix(p_alpha, 0.0, pow(age, 2.0));
                 """.trimIndent()
                 parameter("res", particleRes)
@@ -242,11 +276,14 @@ class ParticlesManager(val particleRes: Int, val geometry: VertexBuffer, colors:
                 parameter("infoTex", infoBuffer)
                 parameter("TAU", 2.0 * PI)
                 parameter("time", time)
+                parameter("count", particleCount)
+                parameter("colorsSize", paletteStudio.colors2.size)
                 parameter("ageLimit", time)
                 parameter("range", range)
                 parameter("alpha", alpha)
                 parameter("viewMatrix", drawer.view)
-                parameter("viewModelSpace", drawer.view.inversed)
+                parameter("cameraWorldSpace", drawer.view.inversed)
+                attributes(colors)
             }
             drawer.drawStyle.depthTestPass = DepthTestPass.ALWAYS
             drawer.vertexBufferInstances(listOf(geometry), listOf(transforms), DrawPrimitive.TRIANGLE_STRIP, particleCount)

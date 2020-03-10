@@ -2,6 +2,7 @@ import particles.ParticlesManager
 import org.openrndr.application
 import org.openrndr.draw.*
 import org.openrndr.extensions.Screenshots
+import org.openrndr.extra.fx.blur.GaussianBloom
 import org.openrndr.extra.gui.GUI
 import org.openrndr.extra.palette.PaletteStudio
 import org.openrndr.extra.parameters.Description
@@ -12,7 +13,7 @@ import org.openrndr.math.*
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
-val paletteStudio = PaletteStudio( sortBy = PaletteStudio.SortBy.BRIGHTEST)
+val paletteStudio = PaletteStudio( sortBy = PaletteStudio.SortBy.DARKEST)
 
 fun main() = application {
     configure {
@@ -22,6 +23,12 @@ fun main() = application {
 
     program {
         paletteStudio.select(92)
+
+        val rt = renderTarget(width, height) {
+            colorBuffer(type = ColorType.FLOAT16)
+        }
+
+        val canvas = colorBuffer(width, height, type = ColorType.FLOAT16)
 
 //        val geometry = vertexBuffer(vertexFormat {
 //            position(3)
@@ -51,7 +58,7 @@ fun main() = application {
             write(Vector2(1.0, 1.0))
         }
 
-        val particles = ParticlesManager(500, geometry, paletteStudio.colors2)
+        val particles = ParticlesManager(500, geometry)
 
         val current = LocalDateTime.now()
         val formatter = DateTimeFormatter.ofPattern("HH:mm:ss")
@@ -74,16 +81,29 @@ fun main() = application {
         gui.add(params)
         gui.add(particles.positionShader)
 
+        val bloom = GaussianBloom()
+
+        gui.add(bloom)
+
         extend(paletteStudio)
         extend(controls)
         extend(camera)
         extend(Screenshots())
         extend(gui)
         extend {
-            drawer.background(paletteStudio.background)
-            camera.rotate(deltaTime * 7.5, 0.0)
+            drawer.isolatedWithTarget(rt) {
+                drawer.background(paletteStudio.background)
+                camera.rotate(deltaTime * 7.5, 0.0)
 
-            particles.draw(drawer, camera, seconds, deltaTime, params.range, params.alpha)
+                particles.draw(drawer, seconds, deltaTime, params.range, params.alpha)
+            }
+
+            bloom.apply(rt.colorBuffer(0), canvas)
+
+            drawer.isolated {
+                drawer.defaults()
+                drawer.image(canvas)
+            }
         }
     }
 }
